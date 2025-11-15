@@ -34,7 +34,12 @@ struct Node {
 // A simple container for vector data.
 class VectorStorage {
 public:
+    VectorStorage(size_t vector_dimension) : vector_dimension_(vector_dimension) {}
+
     void add_vector(const std::vector<float>& vec) {
+        if (vec.size() != vector_dimension_) {
+            throw std::invalid_argument("Vector dimension mismatch.");
+        }
         vectors.push_back(vec);
     }
 
@@ -47,6 +52,7 @@ public:
     }
 
 private:
+    size_t vector_dimension_;
     std::vector<std::vector<float>> vectors;
 };
 
@@ -56,8 +62,9 @@ public:
     // efConstruction: size of the dynamic list for the nearest neighbors search during construction
     // efSearch: size of the dynamic list for the nearest neighbors search during query time
     // metric: The distance metric to use (L2, COSINE, IP)
-    HNSW(int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
-        : entry_point_id(-1), 
+    HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
+        : vector_storage(vector_dimension),
+          entry_point_id(-1), 
           M(M), 
           efConstruction(efConstruction), 
           efSearch(efSearch),

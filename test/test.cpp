@@ -2,6 +2,7 @@
 #include <vector>
 #include <cassert>
 #include <cmath> // For std::abs
+#include <stdexcept> // For std::invalid_argument
 #include "hnsw.h"
 
 // Helper to compare floats with tolerance
@@ -10,7 +11,7 @@ bool float_equals(float a, float b, float epsilon = 1e-6) {
 }
 
 void test_l2_distance_hnsw() {
-    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::L2);
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::L2); // vector_dimension = 2
 
     hnsw_graph.insert({0.0f, 0.0f}); // Node 0
     hnsw_graph.insert({1.0f, 0.0f}); // Node 1
@@ -24,7 +25,7 @@ void test_l2_distance_hnsw() {
 }
 
 void test_cosine_distance_hnsw() {
-    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::COSINE);
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::COSINE); // vector_dimension = 2
 
     hnsw_graph.insert({1.0f, 0.0f}); // Node 0 (angle 0)
     hnsw_graph.insert({0.0f, 1.0f}); // Node 1 (angle 90)
@@ -50,7 +51,7 @@ void test_cosine_distance_hnsw() {
 }
 
 void test_inner_product_distance_hnsw() {
-    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::IP);
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::IP); // vector_dimension = 2
 
     hnsw_graph.insert({1.0f, 1.0f}); // Node 0 (IP with (1,1) = 2)
     hnsw_graph.insert({1.0f, 0.0f}); // Node 1 (IP with (1,1) = 1)
@@ -74,7 +75,7 @@ void test_node_structure() {
 }
 
 void test_vector_storage() {
-    hnsw::VectorStorage storage;
+    hnsw::VectorStorage storage(2); // vector_dimension = 2
     std::vector<float> v1 = {1.0f, 2.0f};
     std::vector<float> v2 = {3.0f, 4.0f};
 
@@ -89,7 +90,7 @@ void test_vector_storage() {
 }
 
 void test_search_layer() {
-    hnsw::HNSW hnsw_graph; // Default L2 metric
+    hnsw::HNSW hnsw_graph(2); // vector_dimension = 2, Default L2 metric
 
     // Add vectors
     hnsw_graph.vector_storage.add_vector({0.0f, 0.0f}); // Node 0
@@ -153,7 +154,7 @@ void test_search_layer() {
 
 void test_full_hnsw_insertion() {
     // Test with M=2, efConstruction=5
-    hnsw::HNSW hnsw_graph(2, 5); // Default L2 metric
+    hnsw::HNSW hnsw_graph(2, 2, 5); // vector_dimension = 2, Default L2 metric
 
     // Insert a few vectors
     hnsw_graph.insert({0.0f, 0.0f}); // Node 0
@@ -189,7 +190,7 @@ void test_full_hnsw_insertion() {
 }
 
 void test_k_nearest_neighbors() {
-    hnsw::HNSW hnsw_graph(2, 5, 5); // Default L2 metric
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5); // vector_dimension = 2, Default L2 metric
 
     // Insert some vectors
     hnsw_graph.insert({0.0f, 0.0f}); // Node 0
@@ -216,6 +217,25 @@ void test_k_nearest_neighbors() {
     std::cout << "test_k_nearest_neighbors passed." << std::endl;
 }
 
+void test_vector_dimension_enforcement() {
+    hnsw::HNSW hnsw_graph(2); // Initialize with vector_dimension = 2
+
+    // Should insert successfully
+    hnsw_graph.insert({1.0f, 2.0f});
+
+    // Should throw an exception for incorrect dimension
+    bool caught_exception = false;
+    try {
+        hnsw_graph.insert({1.0f, 2.0f, 3.0f}); // Dimension 3, expected 2
+    } catch (const std::invalid_argument& e) {
+        caught_exception = true;
+        assert(std::string(e.what()) == "Vector dimension mismatch.");
+    }
+    assert(caught_exception);
+
+    std::cout << "test_vector_dimension_enforcement passed." << std::endl;
+}
+
 int main() {
     test_l2_distance_hnsw();
     test_cosine_distance_hnsw();
@@ -225,6 +245,7 @@ int main() {
     test_search_layer();
     test_full_hnsw_insertion();
     test_k_nearest_neighbors();
+    test_vector_dimension_enforcement();
 
     std::cout << "All tests passed!" << std::endl;
 
