@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/hnsw_test.dir/link.d CMakeFiles/hnsw_test.dir/test/test.cpp.o -o hnsw_test

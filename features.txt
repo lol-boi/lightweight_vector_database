@@ -1,0 +1,78 @@
+1. 🏛️ At Collection Creation Time
+
+These are the "schema" definitions. They define the structure and behavior of your "table" (collection). Once set, these are usually hard or impossible to change without re-indexing.
+
+    vector_dimension (Required): The integer length of the vectors you'll be storing (e.g., 768 for a bert-base model). This is non-negotiable.
+
+    distance_metric (Required): As you said, this is essential. The "big three" cover 99% of use cases:
+
+        L2 (Euclidean): The straight-line "ruler" distance. Great for many computer vision and general-purpose embeddings.
+
+        Cosine (Angular): The most popular for text and NLP. It measures the angle between vectors, ignoring their magnitude. This is perfect for semantic similarity.
+
+        IP (Inner Product / Dot Product): Measures both direction and magnitude. It's mathematically related to Cosine and is very fast, especially if all vectors are normalized (in which case it's identical to Cosine).
+
+    index_type (Optional): Give users a choice between perfect accuracy and high speed.
+        HNSW (Default): Your high-performance Approximate Nearest Neighbor (ANN) index.
+
+2. ⚙️ At Indexing Time (HNSW Tuning)
+
+These are the "pro-user" knobs for tuning the HNSW index. You should set sensible defaults, but allowing users to override them is a key feature.
+
+    M (Max Connections): The maximum number of neighbors a node can have in the graph.
+
+        Higher M: A denser, more accurate graph. This means higher recall (accuracy) but also uses more RAM and takes longer to build.
+
+        Lower M: A sparser, less-connected graph. It's faster to build and uses less RAM, but search accuracy might drop.
+
+    ef_construction (Construction "Effort"): The size of the "candidate list" used while building the index.
+
+        Higher ef_construction: A much higher-quality index (better accuracy). This can dramatically slow down data insertion/build time.
+
+        Lower ef_construction: A faster build, but the index quality (and thus search accuracy) will be lower.
+
+3. 🔍 At Query (Search) Time
+
+These are the options users will tweak with every single search.
+
+    k (Required): The number of nearest neighbors to return (e.g., "give me the top 5 results").
+
+    ef_search (Search "Effort"): This is the most important tuning knob for your users. It's the size of the candidate list used during a search.
+
+        This directly controls the speed-vs-accuracy trade-off.
+
+        Higher ef_search: The search is slower but far more accurate (higher recall).
+
+        Lower ef_search: The search is blazing fast but may miss some of the true nearest neighbors.
+
+        Crucially: This can be set per-query, so a user can do a "quick search" with a low ef_search and a "deep, high-accuracy search" with a high one.
+
+    filter (The Killer Feature): The ability to apply a metadata filter before or during the search. This is what makes it a real database. Start simple:
+
+        Simple Equality: filter={"source": "/doc/a.txt", "author": "John"}. This would only return vectors that match that metadata.
+
+    include (Data Returned): An array of strings to let the user control the payload size.
+
+        include=["metadata", "distance", "vector"].
+
+        A user might just want the IDs and metadata (include=["metadata"]) and not the distance or the full vector, saving bandwidth.
+
+4. 💾 At Database Connection Time
+
+These are "SQLite-like" options that control the file and memory behavior.
+
+    read_only (Boolean): Opens the database file in read-only mode. This is a critical feature for allowing multiple processes to read from the same database file safely.
+
+    cache_size_mb (Integer): How much system RAM to allocate for caching parts of the index or data (similar to PRAGMA cache_size in SQLite). More cache = faster queries, especially on spinning disks.
+
+    sync_mode (Write Durability): Another classic SQLite feature (like PRAGMA synchronous).
+
+        FULL (Default): Safest. Every write is fully synced to disk. Slower.
+
+        NORMAL: Balanced.
+
+        OFF: Fastest. The OS handles flushing to disk. Great for bulk-loading data, but you risk data corruption on a power loss or crash.
+
+By offering options at these four stages, you create a library that is simple for a beginner (who will just set dimension and distance_metric) but deeply tunable for a pro (who will be tweaking M, ef_construction, and sync_mode).
+
+Would you like to dive deeper into how to implement the metadata filtering? That's often the trickiest part

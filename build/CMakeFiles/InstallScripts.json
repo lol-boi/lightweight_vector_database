@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/blamez/Projects/lightweight_vector_database/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
