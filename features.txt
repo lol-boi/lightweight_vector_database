@@ -47,11 +47,11 @@ These are the options users will tweak with every single search.
 
 These are "SQLite-like" options that control the file and memory behavior.
 
-    read_only (Boolean): Opens the database file in read-only mode. This is a critical feature for allowing multiple processes to read from the same database file safely. (PENDING)
+    read_only (Boolean): Opens the database file in read-only mode. This is a critical feature for allowing multiple processes to read from the same database file safely. (IMPLEMENTED)
 
-    cache_size_mb (Integer): How much system RAM to allocate for caching parts of the index or data (similar to PRAGMA cache_size in SQLite). More cache = faster queries, especially on spinning disks. (PENDING)
+    cache_size_mb (Integer): How much system RAM to allocate for caching parts of the index or data (similar to PRAGMA cache_size in SQLite). More cache = faster queries, especially on spinning disks. (IMPLEMENTED)
 
-    sync_mode (Write Durability): Another classic SQLite feature (like PRAGMA synchronous). (PENDING)
+    sync_mode (Write Durability): Another classic SQLite feature (like PRAGMA synchronous). (IMPLEMENTED)
         FULL (Default): Safest. Every write is fully synced to disk. Slower.
         NORMAL: Balanced.
         OFF: Fastest. The OS handles flushing to disk. Great for bulk-loading data, but you risk data corruption on a power loss or crash.

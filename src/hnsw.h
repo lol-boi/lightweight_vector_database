@@ -80,6 +80,10 @@ public:
         return vectors.size();
     }
 
+    size_t get_vector_dimension() const {
+        return vector_dimension_;
+    }
+
 private:
     size_t vector_dimension_;
     std::vector<std::vector<float>> vectors;
@@ -92,14 +96,27 @@ public:
     // efConstruction: size of the dynamic list for the nearest neighbors search during construction
     // efSearch: size of the dynamic list for the nearest neighbors search during query time
     // metric: The distance metric to use (L2, COSINE, IP)
-HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
+    HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2)
         : vector_storage(vector_dimension),
-          entry_point_id(-1), 
-          M(M), 
-          efConstruction(efConstruction), 
+          entry_point_id(-1),
+          M(M),
+          efConstruction(efConstruction),
           efSearch(efSearch),
           distance_metric(metric),
-          gen(std::random_device{}()), 
+          gen(std::random_device{}()),
+          dist(0.0, 1.0) {
+        m_L = 1.0 / log(1.0 * M);
+    }
+
+    HNSW(size_t vector_dimension, int M, int efConstruction, int efSearch, DistanceMetric metric, const std::vector<Node>& nodes, const VectorStorage& vector_storage)
+        : vector_storage(vector_storage),
+          nodes(nodes),
+          entry_point_id(nodes.empty() ? -1 : nodes.back().id),
+          M(M),
+          efConstruction(efConstruction),
+          efSearch(efSearch),
+          distance_metric(metric),
+          gen(std::random_device{}()),
           dist(0.0, 1.0) {
         m_L = 1.0 / log(1.0 * M);
     }
@@ -148,7 +165,7 @@ HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch =
             for (int neighbor_id : nodes[current_node_id].neighbors[layer_level]) {
                 if (visited_nodes.find(neighbor_id) == visited_nodes.end()) {
                     visited_nodes.insert(neighbor_id);
-                    
+
                     float dist_to_neighbor = calculate_distance(query, vector_storage.get_vector(neighbor_id));
                     if (result_queue.size() < ef || dist_to_neighbor < result_queue.top().first) {
                         candidate_queue.push({dist_to_neighbor, neighbor_id});
@@ -306,10 +323,30 @@ HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch =
         return entry_point_id;
     }
 
-    public: // Temporarily make these public for testing
-        VectorStorage vector_storage;
-        std::vector<Node> nodes;
-    private:    int entry_point_id; // The ID of the node in the highest layer
+    int get_M() const {
+        return M;
+    }
+
+    int get_efConstruction() const {
+        return efConstruction;
+    }
+
+    int get_efSearch() const {
+        return efSearch;
+    }
+
+    DistanceMetric get_distance_metric() const {
+        return distance_metric;
+    }
+
+    const VectorStorage& get_vector_storage() const {
+        return vector_storage;
+    }
+
+private:
+    VectorStorage vector_storage;
+    std::vector<Node> nodes;
+    int entry_point_id; // The ID of the node in the highest layer
     int M; // Max number of outgoing connections
     int efConstruction; // Size of dynamic list for nearest neighbors search during construction
     int efSearch; // Size of dynamic list for nearest neighbors search during query time
@@ -321,7 +358,6 @@ HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch =
     int random_level() {
         return static_cast<int>(floor(-log(dist(gen)) * m_L));
     }
-
     // Private helper functions for distance calculations
     float calculate_l2_distance(const std::vector<float>& a, const std::vector<float>& b) const {
         if (a.size() != b.size()) {
@@ -373,4 +409,3 @@ HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch =
 } // namespace hnsw
 
 #endif // HNSW_H
-

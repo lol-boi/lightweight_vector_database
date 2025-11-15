@@ -1,9 +1,9 @@
+#include "database.h"
 #include <iostream>
 #include <vector>
 #include <cassert>
 #include <cmath> // For std::abs
 #include <stdexcept> // For std::invalid_argument
-#include "hnsw.h"
 
 // Helper to compare floats with tolerance
 bool float_equals(float a, float b, float epsilon = 1e-6) {
@@ -97,33 +97,35 @@ void test_search_layer() {
     hnsw::HNSW hnsw_graph(2); // vector_dimension = 2, Default L2 metric
 
     // Add vectors
-    hnsw_graph.vector_storage.add_vector({0.0f, 0.0f}, {}); // Node 0
-    hnsw_graph.vector_storage.add_vector({1.0f, 1.0f}, {}); // Node 1
-    hnsw_graph.vector_storage.add_vector({0.1f, 0.1f}, {}); // Node 2 (closer to 0)
-    hnsw_graph.vector_storage.add_vector({5.0f, 5.0f}, {}); // Node 3 (far from 0)
-    hnsw_graph.vector_storage.add_vector({0.2f, 0.2f}, {}); // Node 4 (closer to 0)
+    hnsw::VectorStorage& vector_storage = const_cast<hnsw::VectorStorage&>(hnsw_graph.get_vector_storage());
+    vector_storage.add_vector({0.0f, 0.0f}, {}); // Node 0
+    vector_storage.add_vector({1.0f, 1.0f}, {}); // Node 1
+    vector_storage.add_vector({0.1f, 0.1f}, {}); // Node 2 (closer to 0)
+    vector_storage.add_vector({5.0f, 5.0f}, {}); // Node 3 (far from 0)
+    vector_storage.add_vector({0.2f, 0.2f}, {}); // Node 4 (closer to 0)
 
     // Add nodes
-    hnsw_graph.nodes.emplace_back(0, 0); // Node 0, layer 0
-    hnsw_graph.nodes.emplace_back(1, 0); // Node 1, layer 0
-    hnsw_graph.nodes.emplace_back(2, 0); // Node 2, layer 0
-    hnsw_graph.nodes.emplace_back(3, 0); // Node 3, layer 0
-    hnsw_graph.nodes.emplace_back(4, 0); // Node 4, layer 0
+    std::vector<hnsw::Node>& nodes = const_cast<std::vector<hnsw::Node>&>(hnsw_graph.get_nodes());
+    nodes.emplace_back(0, 0); // Node 0, layer 0
+    nodes.emplace_back(1, 0); // Node 1, layer 0
+    nodes.emplace_back(2, 0); // Node 2, layer 0
+    nodes.emplace_back(3, 0); // Node 3, layer 0
+    nodes.emplace_back(4, 0); // Node 4, layer 0
 
     // Manually set up neighbors for layer 0
     // Node 0 neighbors: 1, 2, 4
-    hnsw_graph.nodes[0].neighbors[0].push_back(1);
-    hnsw_graph.nodes[0].neighbors[0].push_back(2);
-    hnsw_graph.nodes[0].neighbors[0].push_back(4);
+    nodes[0].neighbors[0].push_back(1);
+    nodes[0].neighbors[0].push_back(2);
+    nodes[0].neighbors[0].push_back(4);
 
     // Node 1 neighbors: 0
-    hnsw_graph.nodes[1].neighbors[0].push_back(0);
+    nodes[1].neighbors[0].push_back(0);
 
     // Node 2 neighbors: 0
-    hnsw_graph.nodes[2].neighbors[0].push_back(0);
+    nodes[2].neighbors[0].push_back(0);
 
     // Node 4 neighbors: 0
-    hnsw_graph.nodes[4].neighbors[0].push_back(0);
+    nodes[4].neighbors[0].push_back(0);
 
 
     // Query vector
@@ -320,6 +322,26 @@ void test_data_inclusion() {
     std::cout << "test_data_inclusion passed." << std::endl;
 }
 
+void test_database_save_load() {
+    std::string db_path = "test_db.bin";
+    {
+        hnsw::Database db(db_path, 2);
+        db.insert({1.0f, 2.0f}, {{"type", "a"}});
+        db.insert({3.0f, 4.0f}, {{"type", "b"}});
+        db.save();
+    }
+
+    {
+        hnsw::Database db(db_path, 2, 16, 200, 50, hnsw::DistanceMetric::L2, true); // Read only
+        std::vector<hnsw::QueryResult> results = db.query({1.1f, 2.1f}, 1, nullptr, {hnsw::Include::ID, hnsw::Include::METADATA});
+        assert(results.size() == 1);
+        assert(results[0].id == 0);
+        assert(results[0].metadata["type"] == "a");
+    }
+    std::remove(db_path.c_str());
+    std::cout << "test_database_save_load passed." << std::endl;
+}
+
 int main() {
     test_l2_distance_hnsw();
     test_cosine_distance_hnsw();
@@ -332,9 +354,9 @@ int main() {
     test_vector_dimension_enforcement();
     test_metadata_filtering();
     test_data_inclusion();
+    test_database_save_load();
 
     std::cout << "All tests passed!" << std::endl;
 
     return 0;
 }
-
