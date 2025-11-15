@@ -1,21 +1,67 @@
 #include <iostream>
 #include <vector>
 #include <cassert>
+#include <cmath> // For std::abs
 #include "hnsw.h"
 
-void test_squared_l2_distance() {
-    std::vector<float> v1 = {1.0f, 2.0f, 3.0f};
-    std::vector<float> v2 = {4.0f, 5.0f, 6.0f};
-    float dist = hnsw::squared_l2_distance(v1, v2);
-    // (4-1)^2 + (5-2)^2 + (6-3)^2 = 3^2 + 3^2 + 3^2 = 9 + 9 + 9 = 27
-    assert(dist == 27.0f);
+// Helper to compare floats with tolerance
+bool float_equals(float a, float b, float epsilon = 1e-6) {
+    return std::abs(a - b) < epsilon;
+}
 
-    std::vector<float> v3 = {0.0f, 0.0f};
-    std::vector<float> v4 = {0.0f, 0.0f};
-    dist = hnsw::squared_l2_distance(v3, v4);
-    assert(dist == 0.0f);
+void test_l2_distance_hnsw() {
+    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::L2);
 
-    std::cout << "test_squared_l2_distance passed." << std::endl;
+    hnsw_graph.insert({0.0f, 0.0f}); // Node 0
+    hnsw_graph.insert({1.0f, 0.0f}); // Node 1
+    hnsw_graph.insert({0.0f, 1.0f}); // Node 2
+
+    std::vector<int> results = hnsw_graph.k_nearest_neighbors({0.1f, 0.1f}, 1);
+    assert(results.size() == 1);
+    assert(results[0] == 0); // (0,0) is closest to (0.1,0.1)
+
+    std::cout << "test_l2_distance_hnsw passed." << std::endl;
+}
+
+void test_cosine_distance_hnsw() {
+    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::COSINE);
+
+    hnsw_graph.insert({1.0f, 0.0f}); // Node 0 (angle 0)
+    hnsw_graph.insert({0.0f, 1.0f}); // Node 1 (angle 90)
+    hnsw_graph.insert({1.0f, 1.0f}); // Node 2 (angle 45)
+    hnsw_graph.insert({-1.0f, 0.0f});// Node 3 (angle 180)
+
+    // Query vector (1, 0.1) - very close to (1,0)
+    std::vector<int> results = hnsw_graph.k_nearest_neighbors({1.0f, 0.1f}, 1);
+    assert(results.size() == 1);
+    assert(results[0] == 0);
+
+    // Query vector (0.1, 1) - very close to (0,1)
+    results = hnsw_graph.k_nearest_neighbors({0.1f, 1.0f}, 1);
+    assert(results.size() == 1);
+    assert(results[0] == 1);
+
+    // Query vector (1,1) - should be closest to Node 2
+    results = hnsw_graph.k_nearest_neighbors({1.0f, 1.0f}, 1);
+    assert(results.size() == 1);
+    assert(results[0] == 2);
+
+    std::cout << "test_cosine_distance_hnsw passed." << std::endl;
+}
+
+void test_inner_product_distance_hnsw() {
+    hnsw::HNSW hnsw_graph(2, 5, 5, hnsw::DistanceMetric::IP);
+
+    hnsw_graph.insert({1.0f, 1.0f}); // Node 0 (IP with (1,1) = 2)
+    hnsw_graph.insert({1.0f, 0.0f}); // Node 1 (IP with (1,1) = 1)
+    hnsw_graph.insert({-1.0f, -1.0f});// Node 2 (IP with (1,1) = -2)
+
+    // Query vector (1,1). We want max inner product, which means min negative inner product.
+    std::vector<int> results = hnsw_graph.k_nearest_neighbors({1.0f, 1.0f}, 1);
+    assert(results.size() == 1);
+    assert(results[0] == 0); // Node 0 has highest IP (2)
+
+    std::cout << "test_inner_product_distance_hnsw passed." << std::endl;
 }
 
 void test_node_structure() {
@@ -43,7 +89,7 @@ void test_vector_storage() {
 }
 
 void test_search_layer() {
-    hnsw::HNSW hnsw_graph;
+    hnsw::HNSW hnsw_graph; // Default L2 metric
 
     // Add vectors
     hnsw_graph.vector_storage.add_vector({0.0f, 0.0f}); // Node 0
@@ -107,7 +153,7 @@ void test_search_layer() {
 
 void test_full_hnsw_insertion() {
     // Test with M=2, efConstruction=5
-    hnsw::HNSW hnsw_graph(2, 5);
+    hnsw::HNSW hnsw_graph(2, 5); // Default L2 metric
 
     // Insert a few vectors
     hnsw_graph.insert({0.0f, 0.0f}); // Node 0
@@ -143,7 +189,7 @@ void test_full_hnsw_insertion() {
 }
 
 void test_k_nearest_neighbors() {
-    hnsw::HNSW hnsw_graph(2, 5, 5); // M=2, efConstruction=5, efSearch=5
+    hnsw::HNSW hnsw_graph(2, 5, 5); // Default L2 metric
 
     // Insert some vectors
     hnsw_graph.insert({0.0f, 0.0f}); // Node 0
@@ -171,7 +217,9 @@ void test_k_nearest_neighbors() {
 }
 
 int main() {
-    test_squared_l2_distance();
+    test_l2_distance_hnsw();
+    test_cosine_distance_hnsw();
+    test_inner_product_distance_hnsw();
     test_node_structure();
     test_vector_storage();
     test_search_layer();

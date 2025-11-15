@@ -9,21 +9,16 @@
 #include <set>      // For visited set
 #include <random>  // For std::mt19937 and std::uniform_real_distribution
 #include <algorithm> // For std::sort
+#include <numeric>   // For std::inner_product
 
 namespace hnsw {
 
-// Calculates the Squared L2 Euclidean distance between two vectors.
-float squared_l2_distance(const std::vector<float>& a, const std::vector<float>& b) {
-    if (a.size() != b.size()) {
-        throw std::invalid_argument("Vectors must have the same dimension.");
-    }
-    float distance = 0.0f;
-    for (size_t i = 0; i < a.size(); ++i) {
-        float diff = a[i] - b[i];
-        distance += diff * diff;
-    }
-    return distance;
-}
+// Enum for supported distance metrics
+enum class DistanceMetric {
+    L2,
+    COSINE,
+    IP // Inner Product
+};
 
 // Represents a node in the HNSW graph.
 struct Node {
@@ -60,11 +55,13 @@ public:
     // M: maximum number of outgoing connections in the graph
     // efConstruction: size of the dynamic list for the nearest neighbors search during construction
     // efSearch: size of the dynamic list for the nearest neighbors search during query time
-    HNSW(int M = 5, int efConstruction = 10, int efSearch = 10) 
+    // metric: The distance metric to use (L2, COSINE, IP)
+    HNSW(int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
         : entry_point_id(-1), 
           M(M), 
           efConstruction(efConstruction), 
           efSearch(efSearch),
+          distance_metric(metric),
           gen(std::random_device{}()), 
           dist(0.0, 1.0) {
         m_L = 1.0 / log(1.0 * M);
@@ -89,7 +86,7 @@ public:
         std::set<int> visited_nodes;
 
         // Start with the entry point
-        float dist_to_entry = squared_l2_distance(query, vector_storage.get_vector(entry_point_id));
+        float dist_to_entry = calculate_distance(query, vector_storage.get_vector(entry_point_id));
         candidate_queue.push({dist_to_entry, entry_point_id});
         result_queue.push({dist_to_entry, entry_point_id});
         visited_nodes.insert(entry_point_id);
@@ -111,7 +108,7 @@ public:
             for (int neighbor_id : nodes[current_node_id].neighbors[layer_level]) {
                 if (visited_nodes.find(neighbor_id) == visited_nodes.end()) {
                     visited_nodes.insert(neighbor_id);
-                    float dist_to_neighbor = squared_l2_distance(query, vector_storage.get_vector(neighbor_id));
+                    float dist_to_neighbor = calculate_distance(query, vector_storage.get_vector(neighbor_id));
 
                     if (result_queue.size() < ef || dist_to_neighbor < result_queue.top().first) {
                         candidate_queue.push({dist_to_neighbor, neighbor_id});
@@ -186,7 +183,7 @@ public:
 
                     for (size_t i = 0; i < nodes[neighbor_id].neighbors[layer].size(); ++i) {
                         int current_connected_neighbor_id = nodes[neighbor_id].neighbors[layer][i];
-                        float dist = squared_l2_distance(neighbor_vec, vector_storage.get_vector(current_connected_neighbor_id));
+                        float dist = calculate_distance(neighbor_vec, vector_storage.get_vector(current_connected_neighbor_id));
                         if (dist > max_dist) {
                             max_dist = dist;
                             furthest_neighbor_idx = i;
@@ -254,12 +251,60 @@ public:
     int M; // Max number of outgoing connections
     int efConstruction; // Size of dynamic list for nearest neighbors search during construction
     int efSearch; // Size of dynamic list for nearest neighbors search during query time
+    DistanceMetric distance_metric; // The chosen distance metric
     double m_L;
     std::mt19937 gen;
     std::uniform_real_distribution<> dist;
 
     int random_level() {
         return static_cast<int>(floor(-log(dist(gen)) * m_L));
+    }
+
+    // Private helper functions for distance calculations
+    float calculate_l2_distance(const std::vector<float>& a, const std::vector<float>& b) const {
+        if (a.size() != b.size()) {
+            throw std::invalid_argument("Vectors must have the same dimension.");
+        }
+        float distance = 0.0f;
+        for (size_t i = 0; i < a.size(); ++i) {
+            float diff = a[i] - b[i];
+            distance += diff * diff;
+        }
+        return distance;
+    }
+
+    float calculate_cosine_distance(const std::vector<float>& a, const std::vector<float>& b) const {
+        if (a.size() != b.size()) {
+            throw std::invalid_argument("Vectors must have the same dimension.");
+        }
+        float dot_product = std::inner_product(a.begin(), a.end(), b.begin(), 0.0f);
+        float norm_a = std::sqrt(std::inner_product(a.begin(), a.end(), a.begin(), 0.0f));
+        float norm_b = std::sqrt(std::inner_product(b.begin(), b.end(), b.begin(), 0.0f));
+
+        if (norm_a == 0.0f || norm_b == 0.0f) {
+            return 1.0f; // Or handle as an error, or return 0.0f for identical zero vectors
+        }
+        return 1.0f - (dot_product / (norm_a * norm_b)); // 1 - cosine similarity
+    }
+
+    float calculate_inner_product_distance(const std::vector<float>& a, const std::vector<float>& b) const {
+        if (a.size() != b.size()) {
+            throw std::invalid_argument("Vectors must have the same dimension.");
+        }
+        return -std::inner_product(a.begin(), a.end(), b.begin(), 0.0f); // Negative to use with min-heap for max IP
+    }
+
+    float calculate_distance(const std::vector<float>& a, const std::vector<float>& b) const {
+        switch (distance_metric) {
+            case DistanceMetric::L2:
+                return calculate_l2_distance(a, b);
+            case DistanceMetric::COSINE:
+                return calculate_cosine_distance(a, b);
+            case DistanceMetric::IP:
+                return calculate_inner_product_distance(a, b);
+            default:
+                throw std::runtime_error("Unknown distance metric.");
+        }
     }
 };
 
