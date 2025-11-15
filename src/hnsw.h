@@ -10,6 +10,8 @@
 #include <random>  // For std::mt19937 and std::uniform_real_distribution
 #include <algorithm> // For std::sort
 #include <numeric>   // For std::inner_product
+#include <map>       // For std::map
+#include <functional> // For std::function
 
 namespace hnsw {
 
@@ -18,6 +20,28 @@ enum class DistanceMetric {
     L2,
     COSINE,
     IP // Inner Product
+};
+
+// Type alias for metadata
+using Metadata = std::map<std::string, std::string>;
+
+// Type alias for a filter function
+using FilterFunc = std::function<bool(const Metadata&)>;
+
+// Enum to control what data is returned in the search result
+enum class Include {
+    ID,
+    DISTANCE,
+    METADATA,
+    VECTOR
+};
+
+// Struct for search results
+struct QueryResult {
+    int id;
+    float distance;
+    Metadata metadata;
+    std::vector<float> vector;
 };
 
 // Represents a node in the HNSW graph.
@@ -36,15 +60,20 @@ class VectorStorage {
 public:
     VectorStorage(size_t vector_dimension) : vector_dimension_(vector_dimension) {}
 
-    void add_vector(const std::vector<float>& vec) {
+    void add_vector(const std::vector<float>& vec, const Metadata& meta) {
         if (vec.size() != vector_dimension_) {
             throw std::invalid_argument("Vector dimension mismatch.");
         }
         vectors.push_back(vec);
+        metadata.push_back(meta);
     }
 
     const std::vector<float>& get_vector(size_t index) const {
         return vectors[index];
+    }
+
+    const Metadata& get_metadata(size_t index) const {
+        return metadata[index];
     }
 
     size_t size() const {
@@ -54,6 +83,7 @@ public:
 private:
     size_t vector_dimension_;
     std::vector<std::vector<float>> vectors;
+    std::vector<Metadata> metadata;
 };
 
 class HNSW {
@@ -62,7 +92,7 @@ public:
     // efConstruction: size of the dynamic list for the nearest neighbors search during construction
     // efSearch: size of the dynamic list for the nearest neighbors search during query time
     // metric: The distance metric to use (L2, COSINE, IP)
-    HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
+HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2) 
         : vector_storage(vector_dimension),
           entry_point_id(-1), 
           M(M), 
@@ -80,8 +110,9 @@ public:
     //   entry_point_id: The ID of the starting node in the current layer.
     //   ef: The size of the candidate pool.
     //   layer_level: The specific layer to search.
+    //   filter: An optional function to filter results based on metadata.
     // Output: A vector of node IDs representing the top-ef closest nodes found in this layer.
-    std::vector<int> search_layer(const std::vector<float>& query, int entry_point_id, int ef, int layer_level) {
+    std::vector<int> search_layer(const std::vector<float>& query, int entry_point_id, int ef, int layer_level, const FilterFunc& filter = nullptr) {
         // Pair: {distance, node_id}
         using Candidate = std::pair<float, int>;
 
@@ -95,7 +126,9 @@ public:
         // Start with the entry point
         float dist_to_entry = calculate_distance(query, vector_storage.get_vector(entry_point_id));
         candidate_queue.push({dist_to_entry, entry_point_id});
-        result_queue.push({dist_to_entry, entry_point_id});
+        if (!filter || filter(vector_storage.get_metadata(entry_point_id))) {
+            result_queue.push({dist_to_entry, entry_point_id});
+        }
         visited_nodes.insert(entry_point_id);
 
         while (!candidate_queue.empty()) {
@@ -115,11 +148,13 @@ public:
             for (int neighbor_id : nodes[current_node_id].neighbors[layer_level]) {
                 if (visited_nodes.find(neighbor_id) == visited_nodes.end()) {
                     visited_nodes.insert(neighbor_id);
+                    
                     float dist_to_neighbor = calculate_distance(query, vector_storage.get_vector(neighbor_id));
-
                     if (result_queue.size() < ef || dist_to_neighbor < result_queue.top().first) {
                         candidate_queue.push({dist_to_neighbor, neighbor_id});
-                        result_queue.push({dist_to_neighbor, neighbor_id});
+                        if (!filter || filter(vector_storage.get_metadata(neighbor_id))) {
+                            result_queue.push({dist_to_neighbor, neighbor_id});
+                        }
 
                         // Maintain result_queue size
                         while (result_queue.size() > ef) {
@@ -142,9 +177,9 @@ public:
         return final_results;
     }
 
-    void insert(const std::vector<float>& vec) {
+    void insert(const std::vector<float>& vec, const Metadata& meta = {}) {
         uint32_t new_node_id = vector_storage.size();
-        vector_storage.add_vector(vec);
+        vector_storage.add_vector(vec, meta);
 
         int new_node_layer = random_level();
         nodes.emplace_back(new_node_id, new_node_layer);
@@ -214,8 +249,10 @@ public:
     // Input:
     //   query: The query vector.
     //   k: The number of nearest neighbors to return.
-    // Output: A vector of node IDs representing the k nearest neighbors.
-    std::vector<int> k_nearest_neighbors(const std::vector<float>& query, int k) {
+    //   filter: An optional function to filter results based on metadata.
+    //   include: A set of data to include in the results.
+    // Output: A vector of QueryResult structs.
+    std::vector<QueryResult> k_nearest_neighbors(const std::vector<float>& query, int k, const FilterFunc& filter = nullptr, const std::set<Include>& include = {Include::ID}) {
         if (entry_point_id == -1) {
             return {}; // No nodes in the graph
         }
@@ -225,18 +262,36 @@ public:
 
         // Phase 1: Descend from top layer to Layer 1 to find the entry point for Layer 0
         for (int layer = current_max_layer; layer > 0; --layer) {
-            std::vector<int> candidates = search_layer(query, current_node_id, 1, layer);
-            current_node_id = candidates[0];
+            std::vector<int> candidates = search_layer(query, current_node_id, 1, layer, filter);
+            if (!candidates.empty()) {
+                current_node_id = candidates[0];
+            }
         }
 
         // Phase 2: Perform search at Layer 0 with efSearch
-        std::vector<int> results = search_layer(query, current_node_id, std::max(k, efSearch), 0);
+        std::vector<int> results_ids = search_layer(query, current_node_id, std::max(k, efSearch), 0, filter);
 
-        // Return the top k results
-        if (results.size() > k) {
-            results.resize(k);
+        // Phase 3: Construct QueryResult objects
+        std::vector<QueryResult> final_results;
+        for (int id : results_ids) {
+            if (final_results.size() >= k) {
+                break;
+            }
+            QueryResult result;
+            result.id = id;
+            if (include.count(Include::DISTANCE)) {
+                result.distance = calculate_distance(query, vector_storage.get_vector(id));
+            }
+            if (include.count(Include::METADATA)) {
+                result.metadata = vector_storage.get_metadata(id);
+            }
+            if (include.count(Include::VECTOR)) {
+                result.vector = vector_storage.get_vector(id);
+            }
+            final_results.push_back(result);
         }
-        return results;
+
+        return final_results;
     }
 
     size_t size() const {
@@ -318,3 +373,4 @@ public:
 } // namespace hnsw
 
 #endif // HNSW_H
+

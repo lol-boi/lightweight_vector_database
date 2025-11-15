@@ -13,13 +13,13 @@ bool float_equals(float a, float b, float epsilon = 1e-6) {
 void test_l2_distance_hnsw() {
     hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::L2); // vector_dimension = 2
 
-    hnsw_graph.insert({0.0f, 0.0f}); // Node 0
-    hnsw_graph.insert({1.0f, 0.0f}); // Node 1
-    hnsw_graph.insert({0.0f, 1.0f}); // Node 2
+    hnsw_graph.insert({0.0f, 0.0f}, {}); // Node 0
+    hnsw_graph.insert({1.0f, 0.0f}, {}); // Node 1
+    hnsw_graph.insert({0.0f, 1.0f}, {}); // Node 2
 
-    std::vector<int> results = hnsw_graph.k_nearest_neighbors({0.1f, 0.1f}, 1);
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors({0.1f, 0.1f}, 1);
     assert(results.size() == 1);
-    assert(results[0] == 0); // (0,0) is closest to (0.1,0.1)
+    assert(results[0].id == 0); // (0,0) is closest to (0.1,0.1)
 
     std::cout << "test_l2_distance_hnsw passed." << std::endl;
 }
@@ -27,25 +27,25 @@ void test_l2_distance_hnsw() {
 void test_cosine_distance_hnsw() {
     hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::COSINE); // vector_dimension = 2
 
-    hnsw_graph.insert({1.0f, 0.0f}); // Node 0 (angle 0)
-    hnsw_graph.insert({0.0f, 1.0f}); // Node 1 (angle 90)
-    hnsw_graph.insert({1.0f, 1.0f}); // Node 2 (angle 45)
-    hnsw_graph.insert({-1.0f, 0.0f});// Node 3 (angle 180)
+    hnsw_graph.insert({1.0f, 0.0f}, {}); // Node 0 (angle 0)
+    hnsw_graph.insert({0.0f, 1.0f}, {}); // Node 1 (angle 90)
+    hnsw_graph.insert({1.0f, 1.0f}, {}); // Node 2 (angle 45)
+    hnsw_graph.insert({-1.0f, 0.0f}, {});// Node 3 (angle 180)
 
     // Query vector (1, 0.1) - very close to (1,0)
-    std::vector<int> results = hnsw_graph.k_nearest_neighbors({1.0f, 0.1f}, 1);
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors({1.0f, 0.1f}, 1);
     assert(results.size() == 1);
-    assert(results[0] == 0);
+    assert(results[0].id == 0);
 
     // Query vector (0.1, 1) - very close to (0,1)
     results = hnsw_graph.k_nearest_neighbors({0.1f, 1.0f}, 1);
     assert(results.size() == 1);
-    assert(results[0] == 1);
+    assert(results[0].id == 1);
 
     // Query vector (1,1) - should be closest to Node 2
     results = hnsw_graph.k_nearest_neighbors({1.0f, 1.0f}, 1);
     assert(results.size() == 1);
-    assert(results[0] == 2);
+    assert(results[0].id == 2);
 
     std::cout << "test_cosine_distance_hnsw passed." << std::endl;
 }
@@ -53,14 +53,14 @@ void test_cosine_distance_hnsw() {
 void test_inner_product_distance_hnsw() {
     hnsw::HNSW hnsw_graph(2, 2, 5, 5, hnsw::DistanceMetric::IP); // vector_dimension = 2
 
-    hnsw_graph.insert({1.0f, 1.0f}); // Node 0 (IP with (1,1) = 2)
-    hnsw_graph.insert({1.0f, 0.0f}); // Node 1 (IP with (1,1) = 1)
-    hnsw_graph.insert({-1.0f, -1.0f});// Node 2 (IP with (1,1) = -2)
+    hnsw_graph.insert({1.0f, 1.0f}, {}); // Node 0 (IP with (1,1) = 2)
+    hnsw_graph.insert({1.0f, 0.0f}, {}); // Node 1 (IP with (1,1) = 1)
+    hnsw_graph.insert({-1.0f, -1.0f}, {});// Node 2 (IP with (1,1) = -2)
 
     // Query vector (1,1). We want max inner product, which means min negative inner product.
-    std::vector<int> results = hnsw_graph.k_nearest_neighbors({1.0f, 1.0f}, 1);
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors({1.0f, 1.0f}, 1);
     assert(results.size() == 1);
-    assert(results[0] == 0); // Node 0 has highest IP (2)
+    assert(results[0].id == 0); // Node 0 has highest IP (2)
 
     std::cout << "test_inner_product_distance_hnsw passed." << std::endl;
 }
@@ -78,13 +78,17 @@ void test_vector_storage() {
     hnsw::VectorStorage storage(2); // vector_dimension = 2
     std::vector<float> v1 = {1.0f, 2.0f};
     std::vector<float> v2 = {3.0f, 4.0f};
+    hnsw::Metadata m1 = {{"key", "value1"}};
+    hnsw::Metadata m2 = {{"key", "value2"}};
 
-    storage.add_vector(v1);
-    storage.add_vector(v2);
+    storage.add_vector(v1, m1);
+    storage.add_vector(v2, m2);
 
     assert(storage.size() == 2);
     assert(storage.get_vector(0) == v1);
     assert(storage.get_vector(1) == v2);
+    assert(storage.get_metadata(0) == m1);
+    assert(storage.get_metadata(1) == m2);
 
     std::cout << "test_vector_storage passed." << std::endl;
 }
@@ -93,11 +97,11 @@ void test_search_layer() {
     hnsw::HNSW hnsw_graph(2); // vector_dimension = 2, Default L2 metric
 
     // Add vectors
-    hnsw_graph.vector_storage.add_vector({0.0f, 0.0f}); // Node 0
-    hnsw_graph.vector_storage.add_vector({1.0f, 1.0f}); // Node 1
-    hnsw_graph.vector_storage.add_vector({0.1f, 0.1f}); // Node 2 (closer to 0)
-    hnsw_graph.vector_storage.add_vector({5.0f, 5.0f}); // Node 3 (far from 0)
-    hnsw_graph.vector_storage.add_vector({0.2f, 0.2f}); // Node 4 (closer to 0)
+    hnsw_graph.vector_storage.add_vector({0.0f, 0.0f}, {}); // Node 0
+    hnsw_graph.vector_storage.add_vector({1.0f, 1.0f}, {}); // Node 1
+    hnsw_graph.vector_storage.add_vector({0.1f, 0.1f}, {}); // Node 2 (closer to 0)
+    hnsw_graph.vector_storage.add_vector({5.0f, 5.0f}, {}); // Node 3 (far from 0)
+    hnsw_graph.vector_storage.add_vector({0.2f, 0.2f}, {}); // Node 4 (closer to 0)
 
     // Add nodes
     hnsw_graph.nodes.emplace_back(0, 0); // Node 0, layer 0
@@ -157,11 +161,11 @@ void test_full_hnsw_insertion() {
     hnsw::HNSW hnsw_graph(2, 2, 5); // vector_dimension = 2, Default L2 metric
 
     // Insert a few vectors
-    hnsw_graph.insert({0.0f, 0.0f}); // Node 0
-    hnsw_graph.insert({1.0f, 1.0f}); // Node 1
-    hnsw_graph.insert({0.1f, 0.1f}); // Node 2
-    hnsw_graph.insert({10.0f, 10.0f});// Node 3
-    hnsw_graph.insert({10.1f, 10.1f});// Node 4
+    hnsw_graph.insert({0.0f, 0.0f}, {}); // Node 0
+    hnsw_graph.insert({1.0f, 1.0f}, {}); // Node 1
+    hnsw_graph.insert({0.1f, 0.1f}, {}); // Node 2
+    hnsw_graph.insert({10.0f, 10.0f}, {});// Node 3
+    hnsw_graph.insert({10.1f, 10.1f}, {});// Node 4
 
     // Assertions to check the state of the graph.
     // These will be simple checks, as the exact structure is non-deterministic.
@@ -193,26 +197,30 @@ void test_k_nearest_neighbors() {
     hnsw::HNSW hnsw_graph(2, 2, 5, 5); // vector_dimension = 2, Default L2 metric
 
     // Insert some vectors
-    hnsw_graph.insert({0.0f, 0.0f}); // Node 0
-    hnsw_graph.insert({1.0f, 1.0f}); // Node 1
-    hnsw_graph.insert({0.1f, 0.1f}); // Node 2
-    hnsw_graph.insert({0.2f, 0.2f}); // Node 3
-    hnsw_graph.insert({10.0f, 10.0f});// Node 4
-    hnsw_graph.insert({10.1f, 10.1f});// Node 5
+    hnsw_graph.insert({0.0f, 0.0f}, {}); // Node 0
+    hnsw_graph.insert({1.0f, 1.0f}, {}); // Node 1
+    hnsw_graph.insert({0.1f, 0.1f}, {}); // Node 2
+    hnsw_graph.insert({0.2f, 0.2f}, {}); // Node 3
+    hnsw_graph.insert({10.0f, 10.0f}, {});// Node 4
+    hnsw_graph.insert({10.1f, 10.1f}, {});// Node 5
 
     // Query vector close to (0,0)
     std::vector<float> query = {0.05f, 0.05f};
 
     // Search for k=3 nearest neighbors
-    std::vector<int> results = hnsw_graph.k_nearest_neighbors(query, 3);
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors(query, 3);
 
     assert(results.size() == 3);
 
     // The expected closest nodes are 0, 2, 3. The order might vary, so sort for comparison.
-    std::sort(results.begin(), results.end());
-    assert(results[0] == 0);
-    assert(results[1] == 2);
-    assert(results[2] == 3);
+    std::vector<int> ids;
+    for(const auto& r : results) {
+        ids.push_back(r.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    assert(ids[0] == 0);
+    assert(ids[1] == 2);
+    assert(ids[2] == 3);
 
     std::cout << "test_k_nearest_neighbors passed." << std::endl;
 }
@@ -221,12 +229,12 @@ void test_vector_dimension_enforcement() {
     hnsw::HNSW hnsw_graph(2); // Initialize with vector_dimension = 2
 
     // Should insert successfully
-    hnsw_graph.insert({1.0f, 2.0f});
+    hnsw_graph.insert({1.0f, 2.0f}, {});
 
     // Should throw an exception for incorrect dimension
     bool caught_exception = false;
     try {
-        hnsw_graph.insert({1.0f, 2.0f, 3.0f}); // Dimension 3, expected 2
+        hnsw_graph.insert({1.0f, 2.0f, 3.0f}, {}); // Dimension 3, expected 2
     } catch (const std::invalid_argument& e) {
         caught_exception = true;
         assert(std::string(e.what()) == "Vector dimension mismatch.");
@@ -234,6 +242,82 @@ void test_vector_dimension_enforcement() {
     assert(caught_exception);
 
     std::cout << "test_vector_dimension_enforcement passed." << std::endl;
+}
+
+void test_metadata_filtering() {
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5); // vector_dimension = 2
+
+    hnsw_graph.insert({0.0f, 0.0f}, {{"type", "a"}}); // Node 0
+    hnsw_graph.insert({0.1f, 0.1f}, {{"type", "b"}}); // Node 1
+    hnsw_graph.insert({0.2f, 0.2f}, {{"type", "a"}}); // Node 2
+    hnsw_graph.insert({0.3f, 0.3f}, {{"type", "c"}}); // Node 3
+
+    // Filter for type "a"
+    auto filter_a = [](const hnsw::Metadata& meta) {
+        auto it = meta.find("type");
+        return it != meta.end() && it->second == "a";
+    };
+
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors({0.0f, 0.0f}, 2, filter_a);
+    assert(results.size() == 2);
+    std::vector<int> ids;
+    for(const auto& r : results) {
+        ids.push_back(r.id);
+    }
+    std::sort(ids.begin(), ids.end());
+    assert(ids[0] == 0);
+    assert(ids[1] == 2);
+
+    // Filter for type "b"
+    auto filter_b = [](const hnsw::Metadata& meta) {
+        auto it = meta.find("type");
+        return it != meta.end() && it->second == "b";
+    };
+
+    results = hnsw_graph.k_nearest_neighbors({0.0f, 0.0f}, 1, filter_b);
+    assert(results.size() == 1);
+    assert(results[0].id == 1);
+
+    std::cout << "test_metadata_filtering passed." << std::endl;
+}
+
+void test_data_inclusion() {
+    hnsw::HNSW hnsw_graph(2, 2, 5, 5); // vector_dimension = 2
+
+    hnsw::Metadata meta = {{"key", "value"}};
+    std::vector<float> vec = {1.0f, 2.0f};
+    hnsw_graph.insert(vec, meta); // Node 0
+
+    // Test including different data types
+    std::vector<hnsw::QueryResult> results = hnsw_graph.k_nearest_neighbors({1.1f, 2.1f}, 1, nullptr, {hnsw::Include::ID});
+    assert(results.size() == 1);
+    assert(results[0].id == 0);
+    assert(float_equals(results[0].distance, 0.0f)); // Default value
+    assert(results[0].metadata.empty());
+    assert(results[0].vector.empty());
+
+    results = hnsw_graph.k_nearest_neighbors({1.1f, 2.1f}, 1, nullptr, {hnsw::Include::ID, hnsw::Include::DISTANCE});
+    assert(results.size() == 1);
+    assert(results[0].id == 0);
+    assert(!float_equals(results[0].distance, 0.0f));
+    assert(results[0].metadata.empty());
+    assert(results[0].vector.empty());
+
+    results = hnsw_graph.k_nearest_neighbors({1.1f, 2.1f}, 1, nullptr, {hnsw::Include::ID, hnsw::Include::METADATA});
+    assert(results.size() == 1);
+    assert(results[0].id == 0);
+    assert(float_equals(results[0].distance, 0.0f));
+    assert(results[0].metadata == meta);
+    assert(results[0].vector.empty());
+
+    results = hnsw_graph.k_nearest_neighbors({1.1f, 2.1f}, 1, nullptr, {hnsw::Include::ID, hnsw::Include::VECTOR});
+    assert(results.size() == 1);
+    assert(results[0].id == 0);
+    assert(float_equals(results[0].distance, 0.0f));
+    assert(results[0].metadata.empty());
+    assert(results[0].vector == vec);
+
+    std::cout << "test_data_inclusion passed." << std::endl;
 }
 
 int main() {
@@ -246,6 +330,8 @@ int main() {
     test_full_hnsw_insertion();
     test_k_nearest_neighbors();
     test_vector_dimension_enforcement();
+    test_metadata_filtering();
+    test_data_inclusion();
 
     std::cout << "All tests passed!" << std::endl;
 
