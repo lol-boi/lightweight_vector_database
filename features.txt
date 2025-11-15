@@ -2,7 +2,7 @@
 
 These are the "schema" definitions. They define the structure and behavior of your "table" (collection). Once set, these are usually hard or impossible to change without re-indexing.
 
-    vector_dimension (Required): The integer length of the vectors you'll be storing (e.g., 768 for a bert-base model). This is non-negotiable. (PENDING)
+    vector_dimension (Required): The integer length of the vectors you'll be storing (e.g., 768 for a bert-base model). This is non-negotiable. (IMPLEMENTED)
 
     distance_metric (Required): As you said, this is essential. The "big three" cover 99% of use cases:
         L2 (Euclidean): The straight-line "ruler" distance. Great for many computer vision and general-purpose embeddings. (IMPLEMENTED)
