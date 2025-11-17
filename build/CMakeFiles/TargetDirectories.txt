@@ -1,4 +1,0 @@
-/home/blamez/Projects/lightweight_vector_database/build/CMakeFiles/hnsw_test.dir
-/home/blamez/Projects/lightweight_vector_database/build/CMakeFiles/test.dir
-/home/blamez/Projects/lightweight_vector_database/build/CMakeFiles/edit_cache.dir
-/home/blamez/Projects/lightweight_vector_database/build/CMakeFiles/rebuild_cache.dir

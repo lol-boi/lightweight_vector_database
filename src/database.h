@@ -24,15 +24,58 @@ public:
         // TODO: Implement caching logic using cache_size_mb_
     }
 
-    void insert(const std::vector<float>& vec, const Metadata& meta = {}) {
+    uint32_t insert(const std::vector<float>& vec, const Metadata& meta = {}) {
         if (read_only_) {
             throw std::runtime_error("Database is in read-only mode.");
         }
-        hnsw_.insert(vec, meta);
+        return hnsw_.insert(vec, meta);
+    }
+
+    uint32_t update_vector(uint32_t id, const std::vector<float>& new_vec, const Metadata& new_meta = {}) {
+        if (read_only_) {
+            throw std::runtime_error("Database is in read-only mode.");
+        }
+        delete_vector(id);
+        return insert(new_vec, new_meta);
+    }
+
+    void delete_vector(uint32_t id) {
+        if (read_only_) {
+            throw std::runtime_error("Database is in read-only mode.");
+        }
+        hnsw_.mark_deleted(id);
     }
 
     std::vector<QueryResult> query(const std::vector<float>& query, int k, const FilterFunc& filter = nullptr, const std::set<Include>& include = {Include::ID}) {
         return hnsw_.k_nearest_neighbors(query, k, filter, include);
+    }
+
+    void rebuild_index() {
+        if (read_only_) {
+            throw std::runtime_error("Database is in read-only mode.");
+        }
+
+        // Create a new HNSW instance with the same parameters
+        HNSW new_hnsw(
+            hnsw_.get_vector_storage().get_vector_dimension(),
+            hnsw_.get_M(),
+            hnsw_.get_efConstruction(),
+            hnsw_.get_efSearch(),
+            hnsw_.get_distance_metric()
+        );
+
+        const auto& vector_storage = hnsw_.get_vector_storage();
+        const auto& deleted_nodes = hnsw_.get_deleted_nodes();
+
+        // Iterate through all vectors and insert non-deleted ones into the new index
+        for (size_t i = 0; i < vector_storage.size(); ++i) {
+            if (deleted_nodes.find(i) == deleted_nodes.end()) {
+                new_hnsw.insert(vector_storage.get_vector(i), vector_storage.get_metadata(i));
+            }
+        }
+
+        // Replace the old HNSW index with the new one
+        hnsw_ = std::move(new_hnsw);
     }
 
     void save(SyncMode sync_mode = SyncMode::FULL) {
@@ -87,6 +130,14 @@ public:
                 ofs.write(reinterpret_cast<const char*>(&value_size), sizeof(value_size));
                 ofs.write(pair.second.c_str(), value_size);
             }
+        }
+
+        // Save deleted nodes
+        const auto& deleted_nodes = hnsw_.get_deleted_nodes();
+        size_t num_deleted_nodes = deleted_nodes.size();
+        ofs.write(reinterpret_cast<const char*>(&num_deleted_nodes), sizeof(num_deleted_nodes));
+        for (uint32_t deleted_id : deleted_nodes) {
+            ofs.write(reinterpret_cast<const char*>(&deleted_id), sizeof(deleted_id));
         }
 
         if (sync_mode == SyncMode::FULL) {
@@ -160,7 +211,17 @@ public:
             vector_storage.add_vector(vec, meta);
         }
 
-        hnsw_ = HNSW(vector_dimension, M, efConstruction, efSearch, metric, nodes, vector_storage);
+        // Load deleted nodes
+        size_t num_deleted_nodes;
+        ifs.read(reinterpret_cast<char*>(&num_deleted_nodes), sizeof(num_deleted_nodes));
+        std::unordered_set<uint32_t> deleted_nodes;
+        for (size_t i = 0; i < num_deleted_nodes; ++i) {
+            uint32_t deleted_id;
+            ifs.read(reinterpret_cast<char*>(&deleted_id), sizeof(deleted_id));
+            deleted_nodes.insert(deleted_id);
+        }
+
+        hnsw_ = HNSW(vector_dimension, M, efConstruction, efSearch, metric, nodes, vector_storage, deleted_nodes);
     }
 
 private:

@@ -13,6 +13,8 @@
 #include <map>       // For std::map
 #include <functional> // For std::function
 
+#include <unordered_set>
+
 namespace hnsw {
 
 // Enum for supported distance metrics
@@ -121,6 +123,20 @@ public:
         m_L = 1.0 / log(1.0 * M);
     }
 
+    HNSW(size_t vector_dimension, int M, int efConstruction, int efSearch, DistanceMetric metric, const std::vector<Node>& nodes, const VectorStorage& vector_storage, const std::unordered_set<uint32_t>& deleted_nodes)
+        : vector_storage(vector_storage),
+          nodes(nodes),
+          deleted_nodes_(deleted_nodes),
+          entry_point_id(nodes.empty() ? -1 : nodes.back().id),
+          M(M),
+          efConstruction(efConstruction),
+          efSearch(efSearch),
+          distance_metric(metric),
+          gen(std::random_device{}()),
+          dist(0.0, 1.0) {
+        m_L = 1.0 / log(1.0 * M);
+    }
+
     // Implements the greedy search algorithm within a single layer.
     // Input:
     //   query: The query vector.
@@ -142,9 +158,11 @@ public:
 
         // Start with the entry point
         float dist_to_entry = calculate_distance(query, vector_storage.get_vector(entry_point_id));
-        candidate_queue.push({dist_to_entry, entry_point_id});
-        if (!filter || filter(vector_storage.get_metadata(entry_point_id))) {
-            result_queue.push({dist_to_entry, entry_point_id});
+        if (deleted_nodes_.find(entry_point_id) == deleted_nodes_.end()) {
+            candidate_queue.push({dist_to_entry, entry_point_id});
+            if (!filter || filter(vector_storage.get_metadata(entry_point_id))) {
+                result_queue.push({dist_to_entry, entry_point_id});
+            }
         }
         visited_nodes.insert(entry_point_id);
 
@@ -165,6 +183,10 @@ public:
             for (int neighbor_id : nodes[current_node_id].neighbors[layer_level]) {
                 if (visited_nodes.find(neighbor_id) == visited_nodes.end()) {
                     visited_nodes.insert(neighbor_id);
+
+                    if (deleted_nodes_.find(neighbor_id) != deleted_nodes_.end()) {
+                        continue;
+                    }
 
                     float dist_to_neighbor = calculate_distance(query, vector_storage.get_vector(neighbor_id));
                     if (result_queue.size() < ef || dist_to_neighbor < result_queue.top().first) {
@@ -194,7 +216,7 @@ public:
         return final_results;
     }
 
-    void insert(const std::vector<float>& vec, const Metadata& meta = {}) {
+    uint32_t insert(const std::vector<float>& vec, const Metadata& meta = {}) {
         uint32_t new_node_id = vector_storage.size();
         vector_storage.add_vector(vec, meta);
 
@@ -203,7 +225,7 @@ public:
 
         if (entry_point_id == -1) { // First node
             entry_point_id = new_node_id;
-            return;
+            return new_node_id;
         }
 
         int current_node_id = entry_point_id;
@@ -212,12 +234,18 @@ public:
         // Phase 1: Find entry point for new node's layer
         for (int layer = current_max_layer; layer > new_node_layer; --layer) {
             std::vector<int> candidates = search_layer(vec, current_node_id, 1, layer);
+            if (candidates.empty()) {
+                break; // Cannot descend further
+            }
             current_node_id = candidates[0];
         }
 
         // Phase 2: Insert node into layers from new_node_layer down to 0
         for (int layer = std::min(new_node_layer, current_max_layer); layer >= 0; --layer) {
             std::vector<int> neighbors_found = search_layer(vec, current_node_id, efConstruction, layer);
+            if (neighbors_found.empty()) {
+                continue; // Cannot find neighbors at this level
+            }
 
             // Connect new_node_id to M nearest neighbors
             std::vector<int> new_node_neighbors;
@@ -260,12 +288,13 @@ public:
         if (new_node_layer > nodes[entry_point_id].max_layer) {
             entry_point_id = new_node_id;
         }
+        return new_node_id;
     }
 
     // Performs a k-nearest neighbors search.
     // Input:
     //   query: The query vector.
-    //   k: The number of nearest neighbors to return.
+    //   k: The number of nearest neighbors to return.  
     //   filter: An optional function to filter results based on metadata.
     //   include: A set of data to include in the results.
     // Output: A vector of QueryResult structs.
@@ -291,6 +320,9 @@ public:
         // Phase 3: Construct QueryResult objects
         std::vector<QueryResult> final_results;
         for (int id : results_ids) {
+            if (deleted_nodes_.count(id)) {
+                continue;
+            }
             if (final_results.size() >= k) {
                 break;
             }
@@ -343,6 +375,28 @@ public:
         return vector_storage;
     }
 
+    const std::unordered_set<uint32_t>& get_deleted_nodes() const {
+        return deleted_nodes_;
+    }
+
+    void mark_deleted(uint32_t id) {
+        deleted_nodes_.insert(id);
+        if (entry_point_id == id) {
+            int new_entry_point = -1;
+            int max_layer = -1;
+            // Find a new entry point by selecting the non-deleted node with the highest layer
+            for (const auto& node : nodes) {
+                if (!deleted_nodes_.count(node.id)) {
+                    if (node.max_layer > max_layer) {
+                        max_layer = node.max_layer;
+                        new_entry_point = node.id;
+                    }
+                }
+            }
+            entry_point_id = new_entry_point;
+        }
+    }
+
 private:
     VectorStorage vector_storage;
     std::vector<Node> nodes;
@@ -354,6 +408,7 @@ private:
     double m_L;
     std::mt19937 gen;
     std::uniform_real_distribution<> dist;
+    std::unordered_set<uint32_t> deleted_nodes_;
 
     int random_level() {
         return static_cast<int>(floor(-log(dist(gen)) * m_L));

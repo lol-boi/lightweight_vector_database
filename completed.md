@@ -33,3 +33,4 @@
 *   [x] **Read-only Mode**: Implemented read-only mode for the database.
 *   [x] **Sync Mode**: Implemented sync mode for write durability.
 *   [x] **Cache Size**: Added a cache size parameter for future caching implementation.
+*   [x] **CRUD Operations**: Implemented full Create, Read, Update, and Delete functionality with a soft-delete and index-rebuild strategy.
