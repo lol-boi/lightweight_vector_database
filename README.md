@@ -29,6 +29,12 @@ This database uses a **soft-delete** strategy for performance and simplicity.
 
 *   **`rebuild_index()`**: To solve this, the `Database` class provides a `rebuild_index()` method. This function permanently removes all deleted vectors by building a new, clean index from scratch. You should call this method periodically if your application involves a high volume of deletions to maintain optimal performance and reclaim memory.
 
-## Roadmap
+### Scalar Quantization
 
-The full roadmap can be found in `roadmap.md`.
+Scalar quantization can be used to reduce memory usage by quantizing vectors to 8-bit integers. This can be enabled in the `Database` constructor:
+
+```cpp
+hnsw::Database db("my_db.bin", 128, 16, 200, 50, hnsw::DistanceMetric::L2, false, 0, true);
+```
+
+When scalar quantization is enabled, the `rebuild_index()` method will train the quantizer and encode all vectors. Subsequent queries will use Asymmetric Distance Computation (ADC) to calculate distances between the full-precision query vector and the quantized database vectors.
