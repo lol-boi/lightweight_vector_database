@@ -5,15 +5,15 @@
 #include <cstdint>
 #include <cmath>
 #include <stdexcept>
-#include <queue>    // For priority_queue
-#include <set>      // For visited set
-#include <random>  // For std::mt19937 and std::uniform_real_distribution
-#include <algorithm> // For std::sort
-#include <numeric>   // For std::inner_product
-#include <map>       // For std::map
-#include <functional> // For std::function
-
+#include <queue>
+#include <set>
+#include <random>
+#include <algorithm>
+#include <numeric>
+#include <map>
+#include <functional>
 #include <unordered_set>
+#include "sq.h"
 
 namespace hnsw {
 
@@ -57,29 +57,49 @@ struct Node {
     }
 };
 
-// A simple container for vector data.
 class VectorStorage {
 public:
-    VectorStorage(size_t vector_dimension) : vector_dimension_(vector_dimension) {}
+    VectorStorage(size_t vector_dimension, sq::ScalarQuantizer* sq = nullptr) 
+        : vector_dimension_(vector_dimension), sq_(sq) {}
 
     void add_vector(const std::vector<float>& vec, const Metadata& meta) {
         if (vec.size() != vector_dimension_) {
             throw std::invalid_argument("Vector dimension mismatch.");
         }
-        vectors.push_back(vec);
-        metadata.push_back(meta);
+        vectors_.push_back(vec);
+        metadata_.push_back(meta);
+        if (sq_ && sq_->is_trained()) {
+            encoded_vectors_.push_back(sq_->encode(vec));
+        }
+    }
+
+    void encode_all_vectors() {
+        if (!sq_ || !sq_->is_trained()) {
+            return;
+        }
+        encoded_vectors_.resize(vectors_.size());
+        for (size_t i = 0; i < vectors_.size(); ++i) {
+            encoded_vectors_[i] = sq_->encode(vectors_[i]);
+        }
     }
 
     const std::vector<float>& get_vector(size_t index) const {
-        return vectors[index];
+        return vectors_[index];
+    }
+
+    const std::vector<uint8_t>& get_encoded_vector(size_t index) const {
+        if (!sq_) {
+            throw std::runtime_error("Quantizer is not enabled.");
+        }
+        return encoded_vectors_[index];
     }
 
     const Metadata& get_metadata(size_t index) const {
-        return metadata[index];
+        return metadata_[index];
     }
 
     size_t size() const {
-        return vectors.size();
+        return vectors_.size();
     }
 
     size_t get_vector_dimension() const {
@@ -88,42 +108,28 @@ public:
 
 private:
     size_t vector_dimension_;
-    std::vector<std::vector<float>> vectors;
-    std::vector<Metadata> metadata;
+    std::vector<std::vector<float>> vectors_;
+    std::vector<Metadata> metadata_;
+    sq::ScalarQuantizer* sq_ = nullptr;
+    std::vector<std::vector<uint8_t>> encoded_vectors_;
 };
 
 class HNSW {
 public:
-    // M: maximum number of outgoing connections in the graph
-    // efConstruction: size of the dynamic list for the nearest neighbors search during construction
-    // efSearch: size of the dynamic list for the nearest neighbors search during query time
-    // metric: The distance metric to use (L2, COSINE, IP)
-    HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2)
-        : vector_storage(vector_dimension),
+    HNSW(size_t vector_dimension, int M = 5, int efConstruction = 10, int efSearch = 10, DistanceMetric metric = DistanceMetric::L2, sq::ScalarQuantizer* sq = nullptr)
+        : vector_storage(vector_dimension, sq),
           entry_point_id(-1),
           M(M),
           efConstruction(efConstruction),
           efSearch(efSearch),
           distance_metric(metric),
+          sq_(sq),
           gen(std::random_device{}()),
           dist(0.0, 1.0) {
         m_L = 1.0 / log(1.0 * M);
     }
 
-    HNSW(size_t vector_dimension, int M, int efConstruction, int efSearch, DistanceMetric metric, const std::vector<Node>& nodes, const VectorStorage& vector_storage)
-        : vector_storage(vector_storage),
-          nodes(nodes),
-          entry_point_id(nodes.empty() ? -1 : nodes.back().id),
-          M(M),
-          efConstruction(efConstruction),
-          efSearch(efSearch),
-          distance_metric(metric),
-          gen(std::random_device{}()),
-          dist(0.0, 1.0) {
-        m_L = 1.0 / log(1.0 * M);
-    }
-
-    HNSW(size_t vector_dimension, int M, int efConstruction, int efSearch, DistanceMetric metric, const std::vector<Node>& nodes, const VectorStorage& vector_storage, const std::unordered_set<uint32_t>& deleted_nodes)
+    HNSW(size_t vector_dimension, int M, int efConstruction, int efSearch, DistanceMetric metric, const std::vector<Node>& nodes, const VectorStorage& vector_storage, const std::unordered_set<uint32_t>& deleted_nodes, sq::ScalarQuantizer* sq = nullptr)
         : vector_storage(vector_storage),
           nodes(nodes),
           deleted_nodes_(deleted_nodes),
@@ -132,32 +138,27 @@ public:
           efConstruction(efConstruction),
           efSearch(efSearch),
           distance_metric(metric),
+          sq_(sq),
           gen(std::random_device{}()),
           dist(0.0, 1.0) {
         m_L = 1.0 / log(1.0 * M);
     }
 
-    // Implements the greedy search algorithm within a single layer.
-    // Input:
-    //   query: The query vector.
-    //   entry_point_id: The ID of the starting node in the current layer.
-    //   ef: The size of the candidate pool.
-    //   layer_level: The specific layer to search.
-    //   filter: An optional function to filter results based on metadata.
-    // Output: A vector of node IDs representing the top-ef closest nodes found in this layer.
+    template<typename T>
+    void set_quantizer(T* quantizer) {
+        if constexpr (std::is_same_v<T, sq::ScalarQuantizer>) {
+            sq_ = quantizer;
+            vector_storage = VectorStorage(vector_storage.get_vector_dimension(), sq_);
+        }
+    }
+    
     std::vector<int> search_layer(const std::vector<float>& query, int entry_point_id, int ef, int layer_level, const FilterFunc& filter = nullptr) {
-        // Pair: {distance, node_id}
         using Candidate = std::pair<float, int>;
-
-        // Min-heap for candidates to explore (closest first)
         std::priority_queue<Candidate, std::vector<Candidate>, std::greater<Candidate>> candidate_queue;
-        // Max-heap for results (furthest first, so smallest is at top)
         std::priority_queue<Candidate> result_queue;
-        // Set to keep track of visited nodes
         std::set<int> visited_nodes;
 
-        // Start with the entry point
-        float dist_to_entry = calculate_distance(query, vector_storage.get_vector(entry_point_id));
+        float dist_to_entry = calculate_distance(query, entry_point_id);
         if (deleted_nodes_.find(entry_point_id) == deleted_nodes_.end()) {
             candidate_queue.push({dist_to_entry, entry_point_id});
             if (!filter || filter(vector_storage.get_metadata(entry_point_id))) {
@@ -170,17 +171,11 @@ public:
             Candidate current = candidate_queue.top();
             candidate_queue.pop();
 
-            float current_dist = current.first;
-            int current_node_id = current.second;
-
-            // Optimization: If the current candidate is further than the worst result
-            // and we already have 'ef' results, we can stop.
-            if (result_queue.size() == ef && current_dist > result_queue.top().first) {
+            if (result_queue.size() == ef && current.first > result_queue.top().first) {
                 break;
             }
 
-            // Explore neighbors of the current node in the specified layer
-            for (int neighbor_id : nodes[current_node_id].neighbors[layer_level]) {
+            for (int neighbor_id : nodes[current.second].neighbors[layer_level]) {
                 if (visited_nodes.find(neighbor_id) == visited_nodes.end()) {
                     visited_nodes.insert(neighbor_id);
 
@@ -188,14 +183,13 @@ public:
                         continue;
                     }
 
-                    float dist_to_neighbor = calculate_distance(query, vector_storage.get_vector(neighbor_id));
+                    float dist_to_neighbor = calculate_distance(query, neighbor_id);
                     if (result_queue.size() < ef || dist_to_neighbor < result_queue.top().first) {
                         candidate_queue.push({dist_to_neighbor, neighbor_id});
                         if (!filter || filter(vector_storage.get_metadata(neighbor_id))) {
                             result_queue.push({dist_to_neighbor, neighbor_id});
                         }
 
-                        // Maintain result_queue size
                         while (result_queue.size() > ef) {
                             result_queue.pop();
                         }
@@ -204,14 +198,11 @@ public:
             }
         }
 
-        // Extract node IDs from the result_queue
         std::vector<int> final_results;
         while (!result_queue.empty()) {
             final_results.push_back(result_queue.top().second);
             result_queue.pop();
         }
-        // The result_queue is a max-heap, so the elements are popped in descending order of distance.
-        // We want the closest ones, so reverse the order.
         std::reverse(final_results.begin(), final_results.end());
         return final_results;
     }
@@ -223,7 +214,7 @@ public:
         int new_node_layer = random_level();
         nodes.emplace_back(new_node_id, new_node_layer);
 
-        if (entry_point_id == -1) { // First node
+        if (entry_point_id == -1) {
             entry_point_id = new_node_id;
             return new_node_id;
         }
@@ -231,46 +222,33 @@ public:
         int current_node_id = entry_point_id;
         int current_max_layer = nodes[current_node_id].max_layer;
 
-        // Phase 1: Find entry point for new node's layer
         for (int layer = current_max_layer; layer > new_node_layer; --layer) {
             std::vector<int> candidates = search_layer(vec, current_node_id, 1, layer);
-            if (candidates.empty()) {
-                break; // Cannot descend further
-            }
+            if (candidates.empty()) break;
             current_node_id = candidates[0];
         }
 
-        // Phase 2: Insert node into layers from new_node_layer down to 0
         for (int layer = std::min(new_node_layer, current_max_layer); layer >= 0; --layer) {
             std::vector<int> neighbors_found = search_layer(vec, current_node_id, efConstruction, layer);
-            if (neighbors_found.empty()) {
-                continue; // Cannot find neighbors at this level
-            }
+            if (neighbors_found.empty()) continue;
 
-            // Connect new_node_id to M nearest neighbors
             std::vector<int> new_node_neighbors;
             for (int neighbor_id : neighbors_found) {
                 if (new_node_neighbors.size() < M) {
                     new_node_neighbors.push_back(neighbor_id);
-                } else {
-                    break;
-                }
+                } else break;
             }
 
             for (int neighbor_id : new_node_neighbors) {
                 nodes[new_node_id].neighbors[layer].push_back(neighbor_id);
-                nodes[neighbor_id].neighbors[layer].push_back(new_node_id); // Bidirectional
+                nodes[neighbor_id].neighbors[layer].push_back(new_node_id);
 
-                // Pruning neighbors if necessary
                 if (nodes[neighbor_id].neighbors[layer].size() > M) {
-                    // Find the furthest neighbor and remove it
                     float max_dist = -1.0f;
                     int furthest_neighbor_idx = -1;
-                    const std::vector<float>& neighbor_vec = vector_storage.get_vector(neighbor_id);
-
                     for (size_t i = 0; i < nodes[neighbor_id].neighbors[layer].size(); ++i) {
                         int current_connected_neighbor_id = nodes[neighbor_id].neighbors[layer][i];
-                        float dist = calculate_distance(neighbor_vec, vector_storage.get_vector(current_connected_neighbor_id));
+                        float dist = calculate_distance(vector_storage.get_vector(neighbor_id), current_connected_neighbor_id);
                         if (dist > max_dist) {
                             max_dist = dist;
                             furthest_neighbor_idx = i;
@@ -284,29 +262,18 @@ public:
             current_node_id = neighbors_found[0];
         }
 
-        // Update entry point if new node is in a higher layer
         if (new_node_layer > nodes[entry_point_id].max_layer) {
             entry_point_id = new_node_id;
         }
         return new_node_id;
     }
 
-    // Performs a k-nearest neighbors search.
-    // Input:
-    //   query: The query vector.
-    //   k: The number of nearest neighbors to return.  
-    //   filter: An optional function to filter results based on metadata.
-    //   include: A set of data to include in the results.
-    // Output: A vector of QueryResult structs.
     std::vector<QueryResult> k_nearest_neighbors(const std::vector<float>& query, int k, const FilterFunc& filter = nullptr, const std::set<Include>& include = {Include::ID}) {
-        if (entry_point_id == -1) {
-            return {}; // No nodes in the graph
-        }
+        if (entry_point_id == -1) return {};
 
         int current_node_id = entry_point_id;
         int current_max_layer = nodes[current_node_id].max_layer;
 
-        // Phase 1: Descend from top layer to Layer 1 to find the entry point for Layer 0
         for (int layer = current_max_layer; layer > 0; --layer) {
             std::vector<int> candidates = search_layer(query, current_node_id, 1, layer, filter);
             if (!candidates.empty()) {
@@ -314,22 +281,17 @@ public:
             }
         }
 
-        // Phase 2: Perform search at Layer 0 with efSearch
         std::vector<int> results_ids = search_layer(query, current_node_id, std::max(k, efSearch), 0, filter);
 
-        // Phase 3: Construct QueryResult objects
         std::vector<QueryResult> final_results;
         for (int id : results_ids) {
-            if (deleted_nodes_.count(id)) {
-                continue;
-            }
-            if (final_results.size() >= k) {
-                break;
-            }
+            if (deleted_nodes_.count(id)) continue;
+            if (final_results.size() >= k) break;
+            
             QueryResult result;
             result.id = id;
             if (include.count(Include::DISTANCE)) {
-                result.distance = calculate_distance(query, vector_storage.get_vector(id));
+                result.distance = calculate_distance(query, id);
             }
             if (include.count(Include::METADATA)) {
                 result.metadata = vector_storage.get_metadata(id);
@@ -339,52 +301,24 @@ public:
             }
             final_results.push_back(result);
         }
-
         return final_results;
     }
 
-    size_t size() const {
-        return nodes.size();
-    }
-
-    const std::vector<Node>& get_nodes() const {
-        return nodes;
-    }
-
-    int get_entry_point() const {
-        return entry_point_id;
-    }
-
-    int get_M() const {
-        return M;
-    }
-
-    int get_efConstruction() const {
-        return efConstruction;
-    }
-
-    int get_efSearch() const {
-        return efSearch;
-    }
-
-    DistanceMetric get_distance_metric() const {
-        return distance_metric;
-    }
-
-    const VectorStorage& get_vector_storage() const {
-        return vector_storage;
-    }
-
-    const std::unordered_set<uint32_t>& get_deleted_nodes() const {
-        return deleted_nodes_;
-    }
+    size_t size() const { return nodes.size(); }
+    const std::vector<Node>& get_nodes() const { return nodes; }
+    int get_entry_point() const { return entry_point_id; }
+    int get_M() const { return M; }
+    int get_efConstruction() const { return efConstruction; }
+    int get_efSearch() const { return efSearch; }
+    DistanceMetric get_distance_metric() const { return distance_metric; }
+    const VectorStorage& get_vector_storage() const { return vector_storage; }
+    const std::unordered_set<uint32_t>& get_deleted_nodes() const { return deleted_nodes_; }
 
     void mark_deleted(uint32_t id) {
         deleted_nodes_.insert(id);
         if (entry_point_id == id) {
             int new_entry_point = -1;
             int max_layer = -1;
-            // Find a new entry point by selecting the non-deleted node with the highest layer
             for (const auto& node : nodes) {
                 if (!deleted_nodes_.count(node.id)) {
                     if (node.max_layer > max_layer) {
@@ -400,11 +334,12 @@ public:
 private:
     VectorStorage vector_storage;
     std::vector<Node> nodes;
-    int entry_point_id; // The ID of the node in the highest layer
-    int M; // Max number of outgoing connections
-    int efConstruction; // Size of dynamic list for nearest neighbors search during construction
-    int efSearch; // Size of dynamic list for nearest neighbors search during query time
-    DistanceMetric distance_metric; // The chosen distance metric
+    int entry_point_id;
+    int M;
+    int efConstruction;
+    int efSearch;
+    DistanceMetric distance_metric;
+    sq::ScalarQuantizer* sq_ = nullptr;
     double m_L;
     std::mt19937 gen;
     std::uniform_real_distribution<> dist;
@@ -413,11 +348,24 @@ private:
     int random_level() {
         return static_cast<int>(floor(-log(dist(gen)) * m_L));
     }
-    // Private helper functions for distance calculations
-    float calculate_l2_distance(const std::vector<float>& a, const std::vector<float>& b) const {
-        if (a.size() != b.size()) {
-            throw std::invalid_argument("Vectors must have the same dimension.");
+
+    float calculate_distance(const std::vector<float>& a, const std::vector<float>& b) const {
+        switch (distance_metric) {
+            case DistanceMetric::L2: return calculate_l2_distance(a, b);
+            case DistanceMetric::COSINE: return calculate_cosine_distance(a, b);
+            case DistanceMetric::IP: return calculate_inner_product_distance(a, b);
+            default: throw std::runtime_error("Unknown distance metric.");
         }
+    }
+
+    float calculate_distance(const std::vector<float>& query, int node_id) const {
+        if (sq_ && sq_->is_trained()) {
+            return sq_->calculate_distance(query, vector_storage.get_encoded_vector(node_id));
+        }
+        return calculate_distance(query, vector_storage.get_vector(node_id));
+    }
+
+    float calculate_l2_distance(const std::vector<float>& a, const std::vector<float>& b) const {
         float distance = 0.0f;
         for (size_t i = 0; i < a.size(); ++i) {
             float diff = a[i] - b[i];
@@ -427,37 +375,15 @@ private:
     }
 
     float calculate_cosine_distance(const std::vector<float>& a, const std::vector<float>& b) const {
-        if (a.size() != b.size()) {
-            throw std::invalid_argument("Vectors must have the same dimension.");
-        }
         float dot_product = std::inner_product(a.begin(), a.end(), b.begin(), 0.0f);
         float norm_a = std::sqrt(std::inner_product(a.begin(), a.end(), a.begin(), 0.0f));
         float norm_b = std::sqrt(std::inner_product(b.begin(), b.end(), b.begin(), 0.0f));
-
-        if (norm_a == 0.0f || norm_b == 0.0f) {
-            return 1.0f; // Or handle as an error, or return 0.0f for identical zero vectors
-        }
-        return 1.0f - (dot_product / (norm_a * norm_b)); // 1 - cosine similarity
+        if (norm_a == 0.0f || norm_b == 0.0f) return 1.0f;
+        return 1.0f - (dot_product / (norm_a * norm_b));
     }
 
     float calculate_inner_product_distance(const std::vector<float>& a, const std::vector<float>& b) const {
-        if (a.size() != b.size()) {
-            throw std::invalid_argument("Vectors must have the same dimension.");
-        }
-        return -std::inner_product(a.begin(), a.end(), b.begin(), 0.0f); // Negative to use with min-heap for max IP
-    }
-
-    float calculate_distance(const std::vector<float>& a, const std::vector<float>& b) const {
-        switch (distance_metric) {
-            case DistanceMetric::L2:
-                return calculate_l2_distance(a, b);
-            case DistanceMetric::COSINE:
-                return calculate_cosine_distance(a, b);
-            case DistanceMetric::IP:
-                return calculate_inner_product_distance(a, b);
-            default:
-                throw std::runtime_error("Unknown distance metric.");
-        }
+        return -std::inner_product(a.begin(), a.end(), b.begin(), 0.0f);
     }
 };
 

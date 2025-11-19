@@ -16,16 +16,19 @@ target_include_directories(hnsw_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_executable(delete_test test/test_delete.cpp)
 target_include_directories(delete_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+# Define the update test executable
+add_executable(update_test test/test_update.cpp)
+target_include_directories(update_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Define the SQ test executable
+add_executable(sq_test test/test_sq.cpp)
+target_include_directories(sq_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 # Enable testing with CTest
 enable_testing()
 
 # Add test cases that run the test executables
 add_test(NAME RunHNSWTests COMMAND hnsw_test)
 add_test(NAME RunHNSWDeleteTests COMMAND delete_test)
-
-# Define the update test executable
-add_executable(update_test test/test_update.cpp)
-target_include_directories(update_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-# Add a test case that runs the update test executable
 add_test(NAME RunHNSWUpdateTests COMMAND update_test)
+add_test(NAME RunHNSWSQTests COMMAND sq_test)
